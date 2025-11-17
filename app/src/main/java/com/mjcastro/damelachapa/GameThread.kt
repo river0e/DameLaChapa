@@ -1,13 +1,16 @@
-package com.mjcastro.damelaschapas
+package com.mjcastro.damelachapa
 
 import android.graphics.Canvas
 import android.view.SurfaceHolder
 
-class GameThread(private val surfaceHolder: SurfaceHolder, private val gameView: GameView) : Thread() {
+class GameThread(
+    private val surfaceHolder: SurfaceHolder,
+    private val gameView: GameView
+) : Thread() {
 
     var isRunning: Boolean = false
         private set
-    private var targetFPS: Int = 60 // Fotogramas por segundo objetivo
+    private var targetFPS: Int = 60
 
     fun setRunning(running: Boolean) {
         isRunning = running
@@ -26,10 +29,10 @@ class GameThread(private val surfaceHolder: SurfaceHolder, private val gameView:
             try {
                 canvas = surfaceHolder.lockCanvas()
                 synchronized(surfaceHolder) {
-                    val deltaTime = 1f / targetFPS // ~0.016 segundos por frame
-                    gameView.updateGame(deltaTime) // ✅ Llama al método correcto
+                    val deltaTime = 1f / targetFPS
+                    gameView.update(deltaTime)
                     if (canvas != null) {
-                        gameView.drawEverything(canvas) // ✅ Llama al método correcto
+                        gameView.drawGame(canvas)
                     }
                 }
             } catch (e: Exception) {
@@ -44,7 +47,6 @@ class GameThread(private val surfaceHolder: SurfaceHolder, private val gameView:
                 }
             }
 
-            // Mantener los FPS
             timeMillis = (System.nanoTime() - startTime) / 1_000_000
             waitTime = (targetTimeNanos / 1_000_000) - timeMillis
 
@@ -59,3 +61,4 @@ class GameThread(private val surfaceHolder: SurfaceHolder, private val gameView:
         }
     }
 }
+

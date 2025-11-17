@@ -1,4 +1,4 @@
-package com.mjcastro.damelaschapas
+package com.mjcastro.damelachapa
 
 import org.junit.Test
 

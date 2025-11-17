@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.mjcastro.damelaschapas"
+    namespace = "com.mjcastro.damelachapa"
     compileSdk {
         version = release(36)
     }
