@@ -3,38 +3,99 @@ package com.mjcastro.damelachapa
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Button
+import android.widget.ImageView // Importante
+import android.view.View      // Importante
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import android.media.AudioAttributes
+import android.media.SoundPool
+import android.util.Log
 
 class MainActivity : AppCompatActivity() {
+
+    private var soundPool: SoundPool? = null
+    private var soundClickId = 0
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         enableEdgeToEdge()
-        setContentView(R.layout.activity_main) // Carga tu layout principal
+        setContentView(R.layout.activity_main)
 
-        // Configuración para Edge-to-Edge y paddings.
-        // Solo es necesaria si usas enableEdgeToEdge() y si tu layout principal
-        // (el ConstraintLayout) tiene el id R.id.main.
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
 
-        // --- ¡EL CAMBIO ESTÁ EN ESTA LÍNEA! ---
-        // Ahora buscamos un Button, no un ImageView
-        val btnPlay = findViewById<Button>(R.id.btnPlay)
+        initSound()
 
-        // Configura un listener para cuando se haga clic en el botón
+        // --- REFERENCIAS UI ---
+        val btnPlay = findViewById<Button>(R.id.btnPlay)
+        val btnRules = findViewById<Button>(R.id.btnRules) // Botón nuevo
+        val imgRules = findViewById<ImageView>(R.id.imgRulesOverlay) // Imagen superpuesta
+
+        // 1. Lógica botón JUGAR
         btnPlay.setOnClickListener {
-            // Inicia la GameActivity cuando se pulsa el botón
+            playSound()
             startActivity(Intent(this, GameActivity::class.java))
-            // Opcional: finish() para que el usuario no pueda volver a esta pantalla
-            // con el botón de atrás después de iniciar el juego.
-            // finish()
         }
+
+        // 2. Lógica botón REGLAS
+        btnRules.setOnClickListener {
+            playSound()
+            // Hacemos visible la imagen de reglas
+            imgRules.visibility = View.VISIBLE
+        }
+
+        // 3. Lógica para CERRAR reglas
+        // Al tocar la imagen de las reglas, se oculta
+        imgRules.setOnClickListener {
+            // Opcional: playSound()
+            imgRules.visibility = View.GONE
+        }
+    }
+
+    // Función auxiliar para limpiar el código del onCreate
+    private fun initSound() {
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_GAME)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+
+        soundPool = SoundPool.Builder()
+            .setMaxStreams(2) // Subimos a 2 por si se pulsa rápido
+            .setAudioAttributes(audioAttributes)
+            .build()
+
+        try {
+            soundClickId = soundPool!!.load(this, R.raw.start_click, 1)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun playSound() {
+        if (soundClickId != 0) {
+            soundPool?.play(soundClickId, 1f, 1f, 0, 0, 1f)
+        }
+    }
+
+    // Si el usuario pulsa el botón "Atrás" del móvil mientras ve las reglas, las cerramos
+    override fun onBackPressed() {
+        val imgRules = findViewById<ImageView>(R.id.imgRulesOverlay)
+        if (imgRules.visibility == View.VISIBLE) {
+            imgRules.visibility = View.GONE
+        } else {
+            super.onBackPressed()
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        soundPool?.release()
+        soundPool = null
     }
 }

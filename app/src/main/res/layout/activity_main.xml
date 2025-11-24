@@ -22,18 +22,45 @@
 
     <Button
         android:id="@+id/btnPlay"
-        android:layout_width="227dp"
-        android:layout_height="109dp"
+        android:layout_width="117dp"
+        android:layout_height="49dp"
         android:background="@android:color/transparent"
         android:padding="0dp"
         android:text=""
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintDimensionRatio="3:1"
         app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.231"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVertical_bias="0.885"
+        app:layout_constraintVertical_bias="0.853"
         app:layout_constraintWidth_percent="0.6"
         tools:ignore="SpeakableTextPresentCheck" />
+
+    <Button
+        android:id="@+id/btnRules"
+        android:layout_width="133dp"
+        android:layout_height="55dp"
+        android:background="@android:color/transparent"
+        android:text=""
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.805"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintVertical_bias="0.86"
+        tools:ignore="SpeakableTextPresentCheck" />
+
+    <ImageView
+        android:id="@+id/imgRulesOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:src="@drawable/reglas_menu"
+        android:scaleType="fitXY"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="10dp"
+        android:contentDescription="Reglas del juego" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

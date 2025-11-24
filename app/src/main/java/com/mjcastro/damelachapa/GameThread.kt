@@ -8,30 +8,29 @@ class GameThread(
     private val gameView: GameView
 ) : Thread() {
 
-    var isRunning: Boolean = false
-        private set
-    private var targetFPS: Int = 60
+    private var running = false
+    private val targetFPS = 60
 
-    fun setRunning(running: Boolean) {
-        isRunning = running
+    fun setRunning(isRunning: Boolean) {
+        running = isRunning
     }
 
     override fun run() {
-        var startTime: Long
-        var timeMillis: Long
-        var waitTime: Long
-        val targetTimeNanos = (1_000_000_000 / targetFPS).toLong()
+        var lastTime = System.nanoTime()
+        var canvas: Canvas?
 
-        while (isRunning) {
-            startTime = System.nanoTime()
-            var canvas: Canvas? = null
+        while (running) {
 
+            val now = System.nanoTime()
+            val deltaTime = (now - lastTime) / 1_000_000_000f
+            lastTime = now
+
+            canvas = null
             try {
                 canvas = surfaceHolder.lockCanvas()
-                synchronized(surfaceHolder) {
-                    val deltaTime = 1f / targetFPS
-                    gameView.update(deltaTime)
-                    if (canvas != null) {
+                if (canvas != null) {
+                    synchronized(surfaceHolder) {
+                        gameView.update(deltaTime)
                         gameView.drawGame(canvas)
                     }
                 }
@@ -41,24 +40,9 @@ class GameThread(
                 if (canvas != null) {
                     try {
                         surfaceHolder.unlockCanvasAndPost(canvas)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+                    } catch (_: Exception) {}
                 }
-            }
-
-            timeMillis = (System.nanoTime() - startTime) / 1_000_000
-            waitTime = (targetTimeNanos / 1_000_000) - timeMillis
-
-            try {
-                if (waitTime > 0) {
-                    sleep(waitTime)
-                }
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                e.printStackTrace()
             }
         }
     }
 }
-
