@@ -23,7 +23,7 @@ Desarrollado **100% en Android Nativo (Kotlin)**, utilizando `Canvas` y `Surface
 
 | **El Tablero de Juego** | **Victoria y Derrota (Wireframe)** |
 |:-----------------------:|:---------------------:|
-| ![Gameplay](app/src/main/res/drawable/Gameplay.png) | ![Victoria Derrota](app/src/main/res/drawable/WireFrame%20pantalla%20victoria%20y%20derrota.jpg) |
+| ![Gameplay](https://raw.githubusercontent.com/river0e/DameLaChapa/refs/heads/master/app/src/main/res/drawable/gameplay.jfif) | ![Victoria Derrota](https://raw.githubusercontent.com/river0e/DameLaChapa/master/app/src/main/res/drawable/wireframe%20pantalla%20victoria%20y%20derrota.jpg) |
 | *Interfaz limpia con marcadores y físicas en tiempo real* | *Prototipo pantalla final del juego feedback visual estilo Sumi-e* |
 
 ---
