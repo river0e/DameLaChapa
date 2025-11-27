@@ -22,7 +22,8 @@ data class Chapa(
     val esJugador1: Boolean,
     var vx: Float = 0f, var vy: Float = 0f,
     var enJuego: Boolean = true,
-    var id: Int = 0
+    var id: Int = 0,
+    var alpha: Float = 1f
 )
 
 class GameView @JvmOverloads constructor(
@@ -37,19 +38,77 @@ class GameView @JvmOverloads constructor(
         Bitmap.createScaledBitmap(original, width, height, true)
     }
 
+    // --- LOGO ---
+    private val logoBmp by lazy {
+        BitmapFactory.decodeResource(resources, R.drawable.mi_logo)
+    }
+    private val paintLogo = Paint(Paint.ANTI_ALIAS_FLAG)
     private val chapaJ1Bmp by lazy { BitmapFactory.decodeResource(resources, R.drawable.chapa_daruma) }
     private val chapaJ2Bmp by lazy { BitmapFactory.decodeResource(resources, R.drawable.chapa_inari) }
 
-    // NUEVO: Cargamos las flechas UNA sola vez al inicio para que no vaya lento
     private val arrowLeftBmp by lazy { BitmapFactory.decodeResource(resources, R.drawable.flecha_izq_negativa) }
     private val arrowRightBmp by lazy { BitmapFactory.decodeResource(resources, R.drawable.flecha_der_negativa) }
 
-    // NUEVO: Un Paint específico para la flecha
+    // --- VARIABLES REUTILIZABLES ---
+    // He sacado estas variables aquí arriba para aplicar la regla de "Reciclar es vivir".
+    // Al tenerlas creadas aquí, evito hacer 'new Matrix()' o 'new Paint()' 60 veces por segundo en el draw.
+
+    // 1. Matriz compartida para todas las transformaciones del juego.
+    private val sharedMatrix = Matrix()
+
+    // 2. Shaders pre-cargados. En lugar de crear el BitmapShader en cada frame, lo guardo aquí.
+    private var shaderChapaJ1: BitmapShader? = null
+    private var shaderChapaJ2: BitmapShader? = null
+    private var shaderArrowLeft: BitmapShader? = null
+    private var shaderArrowRight: BitmapShader? = null
+
+    // 3. Array para guardar los shaders de los 5 sellos y no cargarlos de disco continuamente.
+    private val shadersSellos = arrayOfNulls<BitmapShader>(5)
+
+    // 4. Lista auxiliar para recordar cuánto medían los sellos originales (ancho, alto) y escalar bien.
+    private val sellosDimensions = mutableListOf<Pair<Int, Int>>()
+
+    // 5. Paints reciclables. Crear Paints es costoso, mejor reusar estos dos.
+    private val paintSello = Paint().apply { isAntiAlias = true }
+    private val paintSelloSombra = Paint().apply {
+        color = Color.WHITE
+        alpha = 20
+        isAntiAlias = true
+    }
+
+    // Un Paint específico para la flecha
     private val arrowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-    // Imágenes de victoria (se cargan en setupGame)
+    private val ondaPaintJ1 = Paint().apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 10f
+        color = Color.parseColor("#AA660000") // rojo oscuro semitransparente
+        isAntiAlias = true
+    }
+
+    private val ondaPaintJ2 = Paint().apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 10f
+        color = Color.parseColor("#CCEEEEEE") // blanco roto intenso
+        isAntiAlias = true
+    }
+
+    // Imágenes de victoria
     private var victoriaJ1Bmp: Bitmap? = null
     private var victoriaJ2Bmp: Bitmap? = null
+
+    //Efecto explosivo al salir la chapa del tablero
+
+    data class EfectoOnda(
+        val x: Float,
+        val y: Float,
+        var radio: Float = 20f,
+        var alpha: Float = 1f,
+        val esJugador1: Boolean
+    )
+
+    private val ondas = mutableListOf<EfectoOnda>()
+
 
     // --- VARIABLES DEL JUEGO ---
     private val chapas = mutableListOf<Chapa>()
@@ -58,7 +117,7 @@ class GameView @JvmOverloads constructor(
 
     // --- VARIABLES DE ESTADO ---
     private var estadoJuego = EstadoJuego.JUGANDO
-    private var ganador = 0 // 1 o 2
+    private var ganador = 0
     private val botonReiniciarRect = RectF()
 
     // --- LOGICA DE DISPARO ---
@@ -68,41 +127,36 @@ class GameView @JvmOverloads constructor(
 
     private var boardCX = 0f
     private var boardCY = 0f
-
-    private var boardRadius = 0f
+    private var boardRadiusX = 0f
+    private var boardRadiusY = 0f
     private var chapaSeleccionada: Chapa? = null
     private var dragX = 0f
     private var dragY = 0f
     private var isDragging = false
 
-    // --- NUEVO: Variable para el trazo del pincel ---
     private val linePath = Path()
 
     // --- PINCEL DE COLA DE TINTA ---
     private val paintBrush = Paint().apply {
-        color = Color.BLACK
-        style = Paint.Style.FILL // IMPORTANTE: Relleno, no línea
+        color = Color.RED
+        style = Paint.Style.FILL
         isAntiAlias = true
     }
 
-    // Variable para calcular la geometría de la pincelada
     private val brushPath = Path()
-
     private val chapaPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     // --- AUDIO Y VIBRACIÓN ---
     private var soundPool: SoundPool? = null
     private var vibrator: Vibrator? = null
 
-    // IDs de los sonidos cargados
     private var soundClickId = 0
     private var soundChoqueId = 0
     private var soundWinJ1Id = 0
     private var soundWinJ2Id = 0
+    private var soundExpulsionId = 0
 
-    // Variable para evitar que el sonido de victoria se repita en bucle
     private var sonidoVictoriaReproducido = false
-
     private var bgMusic: MediaPlayer? = null
 
     init {
@@ -113,7 +167,6 @@ class GameView @JvmOverloads constructor(
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         if (chapas.isEmpty()) {
-            // Usamos post para asegurar que width y height ya tienen valor
             post {
                 setupGame()
                 thread = GameThread(holder, this)
@@ -131,10 +184,7 @@ class GameView @JvmOverloads constructor(
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         var retry = true
-
-        // Detener el hilo del juego
         thread?.setRunning(false)
-
         while (retry) {
             try {
                 thread?.join()
@@ -143,12 +193,8 @@ class GameView @JvmOverloads constructor(
                 e.printStackTrace()
             }
         }
-
-        // 🔊 Liberar efectos de sonido
         soundPool?.release()
         soundPool = null
-
-        // 🎵 Liberar música de fondo
         bgMusic?.stop()
         bgMusic?.release()
         bgMusic = null
@@ -160,63 +206,52 @@ class GameView @JvmOverloads constructor(
         bgMusic?.setVolume(0.25f, 0.25f)
         bgMusic?.start()
     }
+
     private fun initAudio() {
         initMusic()
-        // 1. Inicializar SoundPool (Compatible con versiones nuevas y viejas)
         val audioAttributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_GAME)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
 
         soundPool = SoundPool.Builder()
-            .setMaxStreams(5) // Máximo 5 sonidos a la vez
+            .setMaxStreams(5)
             .setAudioAttributes(audioAttributes)
             .build()
-
-        // 2. Cargar sonidos
 
         try {
             soundClickId = soundPool!!.load(context, R.raw.start_click, 1)
             soundChoqueId = soundPool!!.load(context, R.raw.choque, 1)
             soundWinJ1Id = soundPool!!.load(context, R.raw.victoria_j1, 1)
             soundWinJ2Id = soundPool!!.load(context, R.raw.victoria_j2, 1)
+            soundExpulsionId = soundPool!!.load(context, R.raw.expulsion, 1)
         } catch (e: Exception) {
             e.printStackTrace()
         }
 
-        // 3. Inicializar Vibrator (Compatible con Android 12+ y versiones anteriores)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Para Android 12 (API 31) en adelante
             val vibratorManager =
                 context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager
             vibrator = vibratorManager.defaultVibrator
         } else {
-            // Para versiones anteriores (Android 11 o inferior)
             @Suppress("DEPRECATION")
             vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         }
     }
 
-    // Función auxiliar para reproducir sonidos fácilmente
     private fun playSound(soundId: Int) {
         if (soundId != 0) {
-            // params: id, volIzquierda, volDerecha, prioridad, bucle, velocidad
             soundPool?.play(soundId, 1f, 1f, 0, 0, 1f)
         }
     }
 
-    // Función auxiliar para vibrar
     private fun vibrateImpact() {
         if (vibrator?.hasVibrator() == true) {
             post {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    vibrator?.vibrate(
-                        VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK)
-                    )
+                    vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK))
                 } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vibrator?.vibrate(
-                        VibrationEffect.createOneShot(70, VibrationEffect.DEFAULT_AMPLITUDE)
-                    )
+                    vibrator?.vibrate(VibrationEffect.createOneShot(70, VibrationEffect.DEFAULT_AMPLITUDE))
                 } else {
                     @Suppress("DEPRECATION")
                     vibrator?.vibrate(70)
@@ -225,40 +260,68 @@ class GameView @JvmOverloads constructor(
         }
     }
 
+    // --- INIT GRAPHICS ---
+    // He creado esta función para cargar todos los recursos pesados (Bitmaps y Shaders) UNA SOLA VEZ.
+    // Antes esto se hacía en el drawGame, causando los tirones. Ahora preparamos la "paleta de pintura" al inicio.
+    private fun initGraphics() {
+        // A. Prepara Shaders de Chapas
+        if (shaderChapaJ1 == null) shaderChapaJ1 = BitmapShader(chapaJ1Bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        if (shaderChapaJ2 == null) shaderChapaJ2 = BitmapShader(chapaJ2Bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+
+        // B. Prepara Shaders de Flechas
+        if (shaderArrowLeft == null && arrowLeftBmp != null) {
+            shaderArrowLeft = BitmapShader(arrowLeftBmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        }
+        if (shaderArrowRight == null && arrowRightBmp != null) {
+            shaderArrowRight = BitmapShader(arrowRightBmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        }
+
+        // C. Prepara Shaders de Sellos (ESTA ERA LA CAUSA PRINCIPAL DEL LAG)
+        // Cargamos los 5 sellos ahora y nunca más tocamos el disco duro durante la partida.
+        val resourcesIds = listOf(R.drawable.sello1, R.drawable.sello2, R.drawable.sello3, R.drawable.sello4, R.drawable.sello5)
+
+        // Solo cargamos si la lista de dimensiones está vacía (para no repetir si reiniciamos)
+        if (sellosDimensions.isEmpty()) {
+            for (i in resourcesIds.indices) {
+                if (shadersSellos[i] == null) {
+                    val bmp = BitmapFactory.decodeResource(resources, resourcesIds[i])
+                    if (bmp != null) {
+                        shadersSellos[i] = BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+                        // Guardo el tamaño para saber escalarlo luego sin necesitar el bitmap
+                        sellosDimensions.add(Pair(bmp.width, bmp.height))
+                    }
+                }
+            }
+        }
+    }
+
     private fun setupGame() {
-        // 1. Reiniciar variables lógicas
         sonidoVictoriaReproducido = false
         chapas.clear()
         chapasGolpeadas.clear()
         turnoActual = Turno.JUGADOR1
         fichasEnMovimiento = false
         shooterChapa = null
-        estadoJuego = EstadoJuego.JUGANDO // Resetear estado
+        estadoJuego = EstadoJuego.JUGANDO
         ganador = 0
 
-        // 2. Definir dimensiones tablero
-        boardCX = width / 2f
-        boardCY = height * 0.53f
+        // Llamo a la carga de gráficos aquí para asegurarme de que todo esté listo antes de pintar el primer frame.
+        initGraphics()
 
-        // Tomamos el menor lado para que el círculo nunca se deforme
-        val minSide = min(width, height)
+        boardCX = width * 0.505f
+        boardCY = height * 0.525f
+        boardRadiusY = height * 0.31f
+        boardRadiusX = width * 0.185f
 
-        // Escalamos el radio en base al lado más pequeño
-        boardRadius = minSide * 0.35f   // puedes subir a 0.40f si quieres ocupar más pantalla
-
-        // El tamaño de la chapa lo calculamos en base a la altura (Y) para que no queden gigantes
-        val radioChapa = boardRadius * 0.12f
-
-        // 3. Crear fichas iniciales
+        val radioChapa = boardRadiusY * 0.12f
 
         for (i in 0 until 5) {
             val spacing = radioChapa * 2.5f
             val startY = boardCY - (spacing * 2) + (spacing * i)
-            chapas.add(Chapa(boardCX - boardRadius * 0.5f, startY, radioChapa, true, id = i))
-            chapas.add(Chapa(boardCX + boardRadius * 0.5f, startY, radioChapa, false, id = i + 10))
+            chapas.add(Chapa(boardCX - boardRadiusX * 0.5f, startY, radioChapa, true, id = i))
+            chapas.add(Chapa(boardCX + boardRadiusX * 0.5f, startY, radioChapa, false, id = i + 10))
         }
 
-        // 4. Cargar imágenes de victoria
         if (victoriaJ1Bmp == null) {
             try {
                 val originalJ1 = BitmapFactory.decodeResource(resources, R.drawable.victoria_p1)
@@ -272,7 +335,6 @@ class GameView @JvmOverloads constructor(
             } catch (e: Exception) { e.printStackTrace() }
         }
 
-        // 5. Definir área del botón "Volver a Jugar" (Parte inferior central)
         val buttonWidth = width * 0.6f
         val buttonHeight = height * 0.15f
         val buttonX = (width - buttonWidth) / 2f
@@ -281,22 +343,18 @@ class GameView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-
         val x = event.x
         val y = event.y
 
-        // --- NUEVO: Lógica para Pantalla de Victoria ---
         if (estadoJuego == EstadoJuego.GAME_OVER) {
             if (event.action == MotionEvent.ACTION_DOWN) {
-                // Si tocan dentro del área del botón "Volver a Jugar"
                 if (botonReiniciarRect.contains(x, y)) {
-                    playSound(soundClickId) // <--- SONIDO CLICK
-                    setupGame() // Reinicia el juego
+                    playSound(soundClickId)
+                    setupGame()
                 }
             }
-            return true // Consumir el evento
+            return true
         }
-        // -----------------------------------------------
 
         if (fichasEnMovimiento) return true
 
@@ -326,61 +384,74 @@ class GameView @JvmOverloads constructor(
                 if (isDragging && chapaSeleccionada != null) {
                     val dx = chapaSeleccionada!!.x - dragX
                     val dy = chapaSeleccionada!!.y - dragY
+                    val distancia = hypot(dx, dy)
+                    val distanciaMax = 450f
 
-                    val distanciaArrastre = min(hypot(dx, dy), 300f)
-                    val potencia = distanciaArrastre * 2f
-                    val angulo = atan2(dy, dx)
+                    if (distancia > 0f) {
+                        val nx = dx / distancia
+                        val ny = dy / distancia
+                        val distNorm = min(distancia / distanciaMax, 1f)
 
-                    chapaSeleccionada!!.vx = cos(angulo) * potencia
-                    chapaSeleccionada!!.vy = sin(angulo) * potencia
+                        val fuerzaMaxima = 2000f
+                        val potencia = (distNorm * distNorm * distNorm) * fuerzaMaxima
 
-                    shooterChapa = chapaSeleccionada
-                    chapasGolpeadas.clear()
-                    enemigosExpulsadosEnTurno = 0
-                    fichasEnMovimiento = true
+                        chapaSeleccionada!!.vx = nx * potencia
+                        chapaSeleccionada!!.vy = ny * potencia
 
-                    isDragging = false
-                    chapaSeleccionada = null
+                        shooterChapa = chapaSeleccionada
+                        chapasGolpeadas.clear()
+                        enemigosExpulsadosEnTurno = 0
+                        fichasEnMovimiento = true
+                        isDragging = false
+                        chapaSeleccionada = null
+                    }
                 }
             }
         }
         return true
     }
 
-
     fun update(deltaTime: Float) {
         if (!fichasEnMovimiento) return
 
         var movimientoDetectado = false
-        val rozamiento = 0.90f
-        val maxVel = 300f
-        val VELOCIDAD_MINIMA_PARA_MOVER = 5f
+        val maxVel = 2000f
+        val VELOCIDAD_MINIMA_PARA_MOVER = 100f
 
         chapas.filter { it.enJuego }.forEach { c ->
-            c.vx = c.vx.coerceIn(-maxVel, maxVel)
-            c.vy = c.vy.coerceIn(-maxVel, maxVel)
 
-            // CAMBIO AQUÍ: Usamos un umbral de velocidad más alto
-            if (abs(c.vx) > VELOCIDAD_MINIMA_PARA_MOVER || abs(c.vy) > VELOCIDAD_MINIMA_PARA_MOVER) {
+            val velocidadTotalInicial = hypot(c.vx, c.vy)
+            if (velocidadTotalInicial > maxVel) {
+                val factorEscala = maxVel / velocidadTotalInicial
+                c.vx *= factorEscala
+                c.vy *= factorEscala
+            }
+
+            val currentSpeed = hypot(c.vx, c.vy)
+
+            if (currentSpeed > VELOCIDAD_MINIMA_PARA_MOVER) {
                 movimientoDetectado = true
                 c.x += c.vx * deltaTime
                 c.y += c.vy * deltaTime
-                c.vx *= rozamiento
-                c.vy *= rozamiento
+
+                var friccion = 0.98f
+                if (currentSpeed < 1000f) friccion = 0.92f
+                if (currentSpeed < 400f) friccion = 0.85f
+
+                c.vx *= friccion
+                c.vy *= friccion
             } else {
-                // Si la velocidad es menor que el umbral, la consideramos parada y la fijamos a cero.
                 c.vx = 0f
                 c.vy = 0f
             }
         }
 
-        // El resto de la lógica de fin de movimiento se mantiene igual
         if (!movimientoDetectado && fichasEnMovimiento) {
             fichasEnMovimiento = false
             evaluarReglasTurno()
         }
 
-        // COLISIONES
+        // --- COLISIONES ---
         val activas = chapas.filter { it.enJuego }
         for (i in activas.indices) {
             for (j in i + 1 until activas.size) {
@@ -392,11 +463,9 @@ class GameView @JvmOverloads constructor(
                 val minDist = c1.radius + c2.radius
 
                 if (dist < minDist && dist > 0f) {
-                    // Solo reproducir si no estaban ya solapadas en el frame anterior (opcional, pero recomendado)
-                    // Para simplificar, lo ponemos directo:
                     playSound(soundChoqueId)
                     vibrateImpact()
-                    // -------------------
+
                     if (c1 == shooterChapa) chapasGolpeadas.add(c2.id)
                     if (c2 == shooterChapa) chapasGolpeadas.add(c1.id)
 
@@ -415,259 +484,263 @@ class GameView @JvmOverloads constructor(
                     val velAlongNormal = rvx * nx + rvy * ny
 
                     if (velAlongNormal < 0) {
-                        val restitution = 0.25f
+                        val restitution = 0.5f
                         val impulse = -(1 + restitution) * velAlongNormal / 2f
                         c1.vx -= impulse * nx
                         c1.vy -= impulse * ny
                         c2.vx += impulse * nx
                         c2.vy += impulse * ny
+
+                        val factorFrenadoChoque = 0.8f
+                        c1.vx *= factorFrenadoChoque
+                        c1.vy *= factorFrenadoChoque
+                        c2.vx *= factorFrenadoChoque
+                        c2.vy *= factorFrenadoChoque
                     }
                 }
             }
         }
 
-        // LIMITE TABLERO
-
+        // --- LIMITE TABLERO ---
         chapas.filter { it.enJuego }.forEach { chapa ->
-            val distCentro = hypot(chapa.x - boardCX, chapa.y - boardCY)
-            if (distCentro > boardRadius + chapa.radius * 0.5f) {
-                chapa.enJuego = false
-                if (shooterChapa != null && chapa.esJugador1 != shooterChapa!!.esJugador1) {
-                    enemigosExpulsadosEnTurno++
-                }
-            }
-        }
+            val dx = chapa.x - boardCX
+            val dy = chapa.y - boardCY
+            val limiteX = boardRadiusX + (chapa.radius * 0.5f)
+            val limiteY = boardRadiusY + (chapa.radius * 0.5f)
+            val estaFuera = (dx / limiteX).pow(2) + (dy / limiteY).pow(2) > 1.0
 
-        // --- REVISAR CONDICIÓN DE VICTORIA ---
+            if (estaFuera) { chapa.enJuego = false
+
+                //Añado efectos de sonido y visuales para la expulsión de la chapa del tablero
+                ondas.add(EfectoOnda(chapa.x, chapa.y, esJugador1 = chapa.esJugador1))
+                playSound(soundExpulsionId)
+
+                if (shooterChapa != null && chapa.esJugador1 != shooterChapa!!.esJugador1) { enemigosExpulsadosEnTurno++ } } }
+
+        // --- CONDICIÓN DE VICTORIA ---
         val f1 = chapas.count { it.esJugador1 && it.enJuego }
         val f2 = chapas.count { !it.esJugador1 && it.enJuego }
 
         if (f1 == 0) {
-            estadoJuego = EstadoJuego.GAME_OVER
-            ganador = 2 // Gana J2
-            fichasEnMovimiento = false
-            // --- SONIDO VICTORIA J2 ---
-            if (!sonidoVictoriaReproducido) {
-                playSound(soundWinJ2Id)
-                sonidoVictoriaReproducido = true
-            }
-            return
+            estadoJuego = EstadoJuego.GAME_OVER; ganador = 2; fichasEnMovimiento = false
+            if (!sonidoVictoriaReproducido) { playSound(soundWinJ2Id); sonidoVictoriaReproducido = true }
         } else if (f2 == 0) {
-            estadoJuego = EstadoJuego.GAME_OVER
-            ganador = 1 // Gana J1
-            fichasEnMovimiento = false
-            // --- SONIDO VICTORIA J1 ---
-            if (!sonidoVictoriaReproducido) {
-                playSound(soundWinJ1Id)
-                sonidoVictoriaReproducido = true
-            }
-            return
-        }
-        // -------------------------------------
-
-        if (!movimientoDetectado && fichasEnMovimiento) {
-            fichasEnMovimiento = false
-            evaluarReglasTurno()
+            estadoJuego = EstadoJuego.GAME_OVER; ganador = 1; fichasEnMovimiento = false
+            if (!sonidoVictoriaReproducido) { playSound(soundWinJ1Id); sonidoVictoriaReproducido = true }
         }
     }
 
     private fun evaluarReglasTurno() {
         val shooter = shooterChapa ?: return
         val esJ1 = shooter.esJugador1
+        val amigos = chapasGolpeadas.count { id -> chapas.any { it.id == id && it.esJugador1 == esJ1 } }
+        val enemigos = chapasGolpeadas.count { id -> chapas.any { it.id == id && it.esJugador1 != esJ1 } }
 
-        val amigos = chapas.count { it.id in chapasGolpeadas && it.esJugador1 == esJ1 }
-        val enemigos = chapas.count { it.id in chapasGolpeadas && it.esJugador1 != esJ1 }
-
-        var cambiaTurno = true
-        var motivo = ""
+        val repiteTurno = enemigos == 1 && enemigosExpulsadosEnTurno == 1 && shooter.enJuego
+        val pierdeTurno = amigos > 0 || enemigos > 1 || (enemigos == 1 && enemigosExpulsadosEnTurno == 0) || enemigos == 0
 
         when {
-            amigos > 0 -> motivo = "¡Fuego amigo! Pierdes turno."
-            enemigos > 1 -> motivo = "¡Golpeaste demasiadas! Turno perdido."
-            enemigos == 1 && enemigosExpulsadosEnTurno == 0 && shooter.enJuego ->
-                motivo = "No la sacaste. Cambio."
-            enemigos == 1 && enemigosExpulsadosEnTurno == 1 && shooter.enJuego -> {
-                motivo = "¡BUEN TIRO! Repites turno."
-                cambiaTurno = false
-            }
-            else -> motivo = "Cambio de turno."
-        }
-        if (cambiaTurno) {
-            turnoActual = if (turnoActual == Turno.JUGADOR1) Turno.JUGADOR2 else Turno.JUGADOR1
+            repiteTurno -> return
+            pierdeTurno -> cambiarTurno()
+            else -> cambiarTurno()
         }
     }
+
+    private fun cambiarTurno() {
+        turnoActual = if (turnoActual == Turno.JUGADOR1) Turno.JUGADOR2 else Turno.JUGADOR1
+    }
+
+    // --- DRAWGAME REFACTORIZADO ---
+    // He eliminado todos los 'new' y 'BitmapFactory' de aquí.
+    // Ahora solo uso los recursos que ya preparamos en initGraphics().
 
     fun drawGame(canvas: Canvas?) {
         if (canvas == null) return
 
-        // --- 1. Si es Game Over, dibujar solo la imagen de victoria ---
+        // --- 1. Game Over ---
         if (estadoJuego == EstadoJuego.GAME_OVER) {
             if (ganador == 1 && victoriaJ1Bmp != null) {
                 canvas.drawBitmap(victoriaJ1Bmp!!, 0f, 0f, null)
             } else if (ganador == 2 && victoriaJ2Bmp != null) {
                 canvas.drawBitmap(victoriaJ2Bmp!!, 0f, 0f, null)
             }
-            return // IMPORTANTE: Salimos para no dibujar nada más
+            return
         }
 
-        // --- 2. Dibujar Juego Normal ---
+        // --- 2. Fondo ---
         canvas.drawBitmap(backgroundBmp, 0f, 0f, null)
 
-        // CHAPAS
+        // --- 3. DIBUJAR CHAPAS (Optimizado) ---
         chapas.filter { it.enJuego }.forEach { chapa ->
-            val bmp = if (chapa.esJugador1) chapaJ1Bmp else chapaJ2Bmp
-            val shader = BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            // Selecciono el shader ya creado, no creo uno nuevo.
+            val shader = if (chapa.esJugador1) shaderChapaJ1 else shaderChapaJ2
+            val bmpWidth = if (chapa.esJugador1) chapaJ1Bmp.width else chapaJ2Bmp.width
+            val bmpHeight = if (chapa.esJugador1) chapaJ1Bmp.height else chapaJ2Bmp.height
 
-            val scaleX = chapa.radius * 2 / bmp.width.toFloat()
-            val scaleY = chapa.radius * 2 / bmp.height.toFloat()
+            if (shader != null) {
+                // RESETEAR matriz compartida (clave del rendimiento, reciclamos la misma matriz)
+                sharedMatrix.reset()
 
-            val matrix = Matrix()
-            matrix.postScale(scaleX, scaleY)
-            matrix.postTranslate(chapa.x - chapa.radius, chapa.y - chapa.radius)
-            shader.setLocalMatrix(matrix)
+                val scaleX = chapa.radius * 2 / bmpWidth
+                val scaleY = chapa.radius * 2 / bmpHeight
 
-            chapaPaint.shader = shader
-            canvas.drawCircle(chapa.x, chapa.y, chapa.radius, chapaPaint)
+                sharedMatrix.postScale(scaleX, scaleY)
+                sharedMatrix.postTranslate(chapa.x - chapa.radius, chapa.y - chapa.radius)
+
+                shader.setLocalMatrix(sharedMatrix)
+                chapaPaint.shader = shader
+                // Aplicar alpha al paint antes de dibujar
+                val easedAlpha = chapa.alpha * chapa.alpha   // ease-out
+
+                canvas.drawCircle(chapa.x, chapa.y, chapa.radius, chapaPaint)
+            }
         }
 
-        // --- DIBUJAR LA PINCELADA SUMI-E (COLA DE TINTA) ---
+        // --- 4. DIBUJAR PINCELADA (Sumi-e) ---
+
         if (isDragging && chapaSeleccionada != null) {
             val chapa = chapaSeleccionada!!
-
-            // 1. Calcular el ángulo y la distancia entre la chapa y el dedo
             val dx = dragX - chapa.x
             val dy = dragY - chapa.y
             val dist = hypot(dx, dy)
-            val angle = atan2(dy, dx)
 
-            // Si la distancia es muy pequeña, no dibujamos nada para evitar errores
             if (dist > 20f) {
-                brushPath.reset()
+                val angle = atan2(dy, dx)
+                brushPath.reset() // Importante resetear
 
-                // 2. Configuración del grosor de la pincelada
-                // baseWidth: Qué tan ancha es la tinta pegada a la chapa (ajusta a tu gusto)
                 val baseWidth = 35f
-
-                // 3. Calcular el PUNTO DE INICIO (En el borde de la chapa, no en el centro)
-                // Nos movemos desde el centro en la dirección del ángulo por el radio de la chapa
-                val startX =
-                    chapa.x + cos(angle) * (chapa.radius * 0.8f) // 0.8f para que se meta un pelín debajo
+                val startX = chapa.x + cos(angle) * (chapa.radius * 0.8f)
                 val startY = chapa.y + sin(angle) * (chapa.radius * 0.8f)
-
-                // 4. Calcular los puntos de la BASE del triángulo (perpendiculares al ángulo)
-                // Esto le da el grosor al inicio
                 val anglePerpendicular = angle + (PI / 2).toFloat()
+
                 val x1 = startX + cos(anglePerpendicular) * (baseWidth / 2)
                 val y1 = startY + sin(anglePerpendicular) * (baseWidth / 2)
                 val x2 = startX - cos(anglePerpendicular) * (baseWidth / 2)
                 val y2 = startY - sin(anglePerpendicular) * (baseWidth / 2)
 
-                // 5. El punto FINAL es tu dedo (dragX, dragY)
-                // Creamos el camino: Esquina 1 -> Dedo -> Esquina 2 -> Cerrar
                 brushPath.moveTo(x1, y1)
                 brushPath.lineTo(dragX, dragY)
                 brushPath.lineTo(x2, y2)
                 brushPath.close()
 
-                // 6. EL TOQUE MAESTRO: Degradado (Shader)
-                // Hacemos que la tinta se vaya volviendo transparente hacia el final (efecto pincel seco)
-                // Color inicio: Negro (#FF000000) -> Color fin: Transparente (#00000000)
                 paintBrush.shader = LinearGradient(
                     startX, startY, dragX, dragY,
-                    Color.parseColor("#E6111111"), // Negro casi sólido (90% opacidad)
-                    Color.TRANSPARENT,             // Transparente al final
+                    Color.parseColor("#E68B0000"),
+                    Color.TRANSPARENT,
                     Shader.TileMode.CLAMP
                 )
-
-                // 7. Dibujar la forma
                 canvas.drawPath(brushPath, paintBrush)
             }
         }
 
-        // MARCADOR (SELLOS)
+        // --- 4.5 EFECTOS DE EXPULSIÓN ---
+        val itOnda = ondas.iterator()
+        while (itOnda.hasNext()) {
+            val o = itOnda.next()
+
+            // Seleccionar paint según jugador
+            val paint = if (o.esJugador1) ondaPaintJ1 else ondaPaintJ2
+
+            // Aplicar alpha dinámico
+            paint.alpha = (o.alpha * 255).toInt()
+
+            // Dibujar onda expansiva
+            canvas.drawCircle(o.x, o.y, o.radio, paint)
+
+            // Animación
+            o.radio += 14f        // velocidad explosiva fuerte
+            o.alpha -= 0.08f      // se desvanece rápido
+
+            if (o.alpha <= 0f) itOnda.remove()
+        }
+
+        // --- 5. MARCADOR (Optimizado) ---
         val f1 = chapas.count { it.esJugador1 && it.enJuego }
         val f2 = chapas.count { !it.esJugador1 && it.enJuego }
+        val selloSize = (height * 0.25f).toInt()
 
-        // Dibujar sellos
-        val selloSize = (height * 0.15f).toInt()
-        drawSello(canvas, f1, width * 0.12f, height * 0.43f, selloSize)
-        drawSello(canvas, f2, width * 0.88f, height * 0.43f, selloSize)
+        // Llamamos a la nueva función optimizada
+        drawSelloOptimizado(canvas, f1, width * 0.18f, height * 0.52f, selloSize)
+        drawSelloOptimizado(canvas, f2, width * 0.82f, height * 0.52f, selloSize)
 
-        // --- FLECHA TURNO (ESTILO CHAPA/SELLO) ---
-
+        // --- 6. FLECHA TURNO (Optimizado) ---
+        val currentArrowShader = if (turnoActual == Turno.JUGADOR1) shaderArrowLeft else shaderArrowRight
         val currentArrowBmp = if (turnoActual == Turno.JUGADOR1) arrowLeftBmp else arrowRightBmp
 
-        if (currentArrowBmp != null) {
-            // Configuración de tamaño y posición (Esto sigue igual)
+        if (currentArrowShader != null && currentArrowBmp != null) {
             val arrowDiameter = height * 0.15f
             val arrowRadius = arrowDiameter / 2f
             val arrowCX = width / 2f
             val arrowCY = (height * 0.009f) + arrowRadius
 
-            val shader = BitmapShader(currentArrowBmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-
-            // --- INICIO DE LA CORRECCIÓN DE PROPORCIÓN ---
-
             val bmpWidth = currentArrowBmp.width.toFloat()
             val bmpHeight = currentArrowBmp.height.toFloat()
 
-            // 1. Calculamos cuánto hay que escalar para llenar el ancho y el alto
             val scaleXNeeded = arrowDiameter / bmpWidth
             val scaleYNeeded = arrowDiameter / bmpHeight
-
-            // 2. CORRECCIÓN IMPORTANTE: Elegimos la escala MAYOR para asegurar que
-            // la imagen llene todo el círculo sin deformarse (Center Crop).
-            // Usamos la misma escala para ambos ejes.
             val finalScale = max(scaleXNeeded, scaleYNeeded)
 
-            val matrix = Matrix()
-            // Aplicamos la escala uniforme
-            matrix.postScale(finalScale, finalScale)
+            sharedMatrix.reset() // Reciclamos matriz
+            sharedMatrix.postScale(finalScale, finalScale)
 
-            // 3. Calculamos el desplazamiento para centrar la imagen escalada
             val scaledBitmapWidth = bmpWidth * finalScale
             val scaledBitmapHeight = bmpHeight * finalScale
             val dx = (arrowDiameter - scaledBitmapWidth) / 2f
             val dy = (arrowDiameter - scaledBitmapHeight) / 2f
 
-            // Movemos la imagen para centrarla en su caja y luego a la posición final en pantalla
-            matrix.postTranslate(dx + (arrowCX - arrowRadius), dy + (arrowCY - arrowRadius))
+            sharedMatrix.postTranslate(dx + (arrowCX - arrowRadius), dy + (arrowCY - arrowRadius))
 
-            // --- FIN DE LA CORRECCIÓN ---
-
-            shader.setLocalMatrix(matrix)
-            arrowPaint.shader = shader
-
-            // Dibujamos el círculo final. Ahora la textura interna no debería estar deformada.
+            currentArrowShader.setLocalMatrix(sharedMatrix)
+            arrowPaint.shader = currentArrowShader
             canvas.drawCircle(arrowCX, arrowCY, arrowRadius, arrowPaint)
+        }
+
+        // --- 7. LOGO INFERIOR DERECHO ---
+        logoBmp?.let { bmp ->
+            val logoDiameter = height * 0.12f
+            val radius = logoDiameter / 2f
+            val posX = width - radius - 20f
+            val posY = height - radius - 20f
+
+            sharedMatrix.reset()
+            sharedMatrix.postScale(logoDiameter / bmp.width.toFloat(), logoDiameter / bmp.height.toFloat())
+            sharedMatrix.postTranslate(posX - radius, posY - radius)
+
+            val shader = BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            shader.setLocalMatrix(sharedMatrix)
+            paintLogo.shader = shader
+
+            canvas.drawCircle(posX, posY, radius, paintLogo)
         }
     }
 
-    // Función auxiliar para dibujar sellos (sacada fuera para limpieza)
-    private fun drawSello(canvas: Canvas, vidas: Int, posX: Float, posY: Float, size: Int) {
-        val resId = when (vidas.coerceIn(1, 5)) {
-            1 -> R.drawable.sello1
-            2 -> R.drawable.sello2
-            3 -> R.drawable.sello3
-            4 -> R.drawable.sello4
-            else -> R.drawable.sello5
-        }
 
-        val bmp = BitmapFactory.decodeResource(resources, resId) ?: return
-        val shader = BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+    // --- NUEVA FUNCIÓN DE SELLOS ---
+    // Esta función sustituye a la antigua. Usamos los shaders del array 'shadersSellos'
+    // y las dimensiones guardadas en 'sellosDimensions'. Así no leemos el PNG otra vez.
+    private fun drawSelloOptimizado(canvas: Canvas, vidas: Int, posX: Float, posY: Float, size: Int) {
+        val index = (vidas - 1).coerceIn(0, 4)
+
+        // Recuperamos shader y dimensiones de memoria
+        val shader = shadersSellos[index] ?: return
+        // Si por lo que sea no se cargaron dimensiones (ej. error de lectura), salimos para no fallar
+        if (index >= sellosDimensions.size) return
+        val (bmpW, bmpH) = sellosDimensions[index]
+
+        sharedMatrix.reset()
+
         val radius = size / 2f
-        val scaleX = (radius * 2) / bmp.width.toFloat()
-        val scaleY = (radius * 2) / bmp.height.toFloat()
+        val scaleX = (radius * 2) / bmpW.toFloat()
+        val scaleY = (radius * 2) / bmpH.toFloat()
 
-        val m = Matrix()
-        m.postScale(scaleX, scaleY)
-        m.postTranslate(posX - radius, posY - radius)
-        shader.setLocalMatrix(m)
+        sharedMatrix.postScale(scaleX, scaleY)
+        sharedMatrix.postTranslate(posX - radius, posY - radius)
 
-        val p = Paint().apply { isAntiAlias = true; this.shader = shader }
-        val shadow = Paint().apply { color = Color.WHITE; alpha = 20; isAntiAlias = true }
+        shader.setLocalMatrix(sharedMatrix)
+        paintSello.shader = shader
 
-        canvas.drawCircle(posX + 4, posY + 6, radius * 1.05f, shadow)
-        canvas.drawCircle(posX, posY, radius, p)
+        // Usamos los Paints reutilizables
+        canvas.drawCircle(posX + 4, posY + 6, radius * 1.05f, paintSelloSombra)
+        canvas.drawCircle(posX, posY, radius, paintSello)
     }
 }

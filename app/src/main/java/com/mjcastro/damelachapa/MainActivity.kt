@@ -11,7 +11,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import android.media.AudioAttributes
 import android.media.SoundPool
-import android.util.Log
+
 
 class MainActivity : AppCompatActivity() {
 
@@ -53,7 +53,6 @@ class MainActivity : AppCompatActivity() {
         // 3. Lógica para CERRAR reglas
         // Al tocar la imagen de las reglas, se oculta
         imgRules.setOnClickListener {
-            // Opcional: playSound()
             imgRules.visibility = View.GONE
         }
     }
@@ -80,16 +79,6 @@ class MainActivity : AppCompatActivity() {
     private fun playSound() {
         if (soundClickId != 0) {
             soundPool?.play(soundClickId, 1f, 1f, 0, 0, 1f)
-        }
-    }
-
-    // Si el usuario pulsa el botón "Atrás" del móvil mientras ve las reglas, las cerramos
-    override fun onBackPressed() {
-        val imgRules = findViewById<ImageView>(R.id.imgRulesOverlay)
-        if (imgRules.visibility == View.VISIBLE) {
-            imgRules.visibility = View.GONE
-        } else {
-            super.onBackPressed()
         }
     }
 
