@@ -8,7 +8,7 @@
 > **Una reinterpretación digital del clásico juego japonés Zeni Hajiki (銭弾き) con estética Sumi-e.**
 
 <p align="center">
-  <img src="app/src/main/res/drawable/main_menu_sumi_background.png" alt="Dame la Chapa Menú Principal" width="600"/>
+  <img src="app/src/main/res/drawable/main_menu_sumi_background.jpg" alt="Dame la Chapa Menú Principal" width="600"/>
 </p>
 
 ## 📖 Sobre el Proyecto
